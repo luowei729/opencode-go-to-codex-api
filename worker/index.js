@@ -147,15 +147,20 @@ function addLog(env, ctx, entry) {
 }
 
 function resolveModelWithRuntime(modelName, env) {
-  // 1. Runtime default (set via web UI - ephemeral in Workers)
+  // 1. Runtime default (forced model from web UI)
   if (runtimeDefaultModel) {
-    return runtimeDefaultModel.replace(/^opencode-go\//, '');
+    const forced = runtimeDefaultModel.replace(/^opencode-go\//, '');
+    // Check if forced model has a mapping, use mapped value if so
+    if (runtimeModelMap[forced]) {
+      return runtimeModelMap[forced].replace(/^opencode-go\//, '');
+    }
+    return forced;
   }
-  // 2. D1-backed model map (all mappings managed here)
+  // 2. D1-backed model map
   if (runtimeModelMap[modelName]) {
     return runtimeModelMap[modelName].replace(/^opencode-go\//, '');
   }
-  // 3. Fall back to original model name (no hardcoded mapping)
+  // 3. Fall back to original model name
   return modelName.replace(/^opencode-go\//, '');
 }
 
