@@ -23,8 +23,9 @@ import indexHtml from '../pages/index.html';
 // Runtime default model (note: resets on each isolate restart in Workers)
 let runtimeDefaultModel = null;
 
-// Runtime custom model map (overrides DEFAULT_MODEL_MAP)
+// Runtime custom model map (overrides DEFAULT_MODEL_MAP) - backed by D1
 const runtimeModelMap = {};
+let modelMapLoaded = false;
 
 // D1 lazy init flag
 let dbInitialized = false;
@@ -33,9 +34,24 @@ async function ensureDbTable(env) {
   if (dbInitialized || !env.DB) return;
   try {
     await env.DB.exec('CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT NOT NULL, method TEXT, path TEXT, model TEXT, resolved_model TEXT, api TEXT, stream INTEGER, status INTEGER)');
+    await env.DB.exec('CREATE TABLE IF NOT EXISTS model_map (from_model TEXT PRIMARY KEY, to_model TEXT NOT NULL)');
     dbInitialized = true;
   } catch (e) {
     console.error('DB init error:', e.message);
+  }
+}
+
+async function loadModelMapFromDb(env) {
+  if (!env.DB) return;
+  try {
+    await ensureDbTable(env);
+    const result = await env.DB.prepare('SELECT * FROM model_map').all();
+    for (const row of (result.results || [])) {
+      runtimeModelMap[row.from_model] = row.to_model;
+    }
+    modelMapLoaded = true;
+  } catch (e) {
+    console.error('Load model map error:', e.message);
   }
 }
 
@@ -135,6 +151,7 @@ async function handleSetDefaultModel(request) {
 
 async function handleResponses(request, env, ctx) {
   try {
+    if (!modelMapLoaded) await loadModelMapFromDb(env);
     const upstreamBase = env.UPSTREAM_BASE_URL || 'https://opencode.ai/zen/go';
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
 
@@ -238,6 +255,7 @@ async function handleResponses(request, env, ctx) {
 
 async function handleChatCompletions(request, env, ctx) {
   try {
+    if (!modelMapLoaded) await loadModelMapFromDb(env);
     const upstreamBase = env.UPSTREAM_BASE_URL || 'https://opencode.ai/zen/go';
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
 
@@ -433,6 +451,7 @@ export default {
     }
 
     if (path === '/api/model-map' && request.method === 'GET') {
+      if (!modelMapLoaded && env.DB) await loadModelMapFromDb(env);
       const defaultMap = {};
       for (const [k, v] of Object.entries(DEFAULT_MODEL_MAP)) defaultMap[k] = v;
       return jsonResponse({
@@ -449,6 +468,12 @@ export default {
         return jsonResponse({ error: { message: 'from 和 to 字段必填' } }, 400);
       }
       runtimeModelMap[from] = to;
+      if (env.DB) {
+        try {
+          await ensureDbTable(env);
+          await env.DB.prepare('INSERT OR REPLACE INTO model_map (from_model, to_model) VALUES (?, ?)').bind(from, to).run();
+        } catch (e) { console.error('Save model map error:', e.message); }
+      }
       return jsonResponse({ success: true, message: `已添加映射: ${from} \u2192 ${to}`, customMap: { ...runtimeModelMap } });
     }
 
@@ -459,6 +484,12 @@ export default {
         return jsonResponse({ error: { message: 'from 字段必填' } }, 400);
       }
       delete runtimeModelMap[from];
+      if (env.DB) {
+        try {
+          await ensureDbTable(env);
+          await env.DB.prepare('DELETE FROM model_map WHERE from_model = ?').bind(from).run();
+        } catch (e) { console.error('Delete model map error:', e.message); }
+      }
       return jsonResponse({ success: true, message: `已删除映射: ${from}`, customMap: { ...runtimeModelMap } });
     }
 
