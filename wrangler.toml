@@ -17,4 +17,13 @@ rules = [
 # DEFAULT_MODEL = ""
 # MODEL_MAP = ""
 
+# D1 数据库用于跨 isolate 存储日志
+# 部署前需创建数据库:
+#   wrangler d1 create opencode-logs
+# 然后把输出的 database_id 填到下面
+[[d1_databases]]
+binding = "DB"
+database_name = "opencode-logs"
+database_id = "99a80166-d799-41d4-8da5-7c23dfc11b42"
+
 # 注意: OPENCODE_TOKEN 不在服务端存储，用户需通过 Authorization 头传递自己的 token

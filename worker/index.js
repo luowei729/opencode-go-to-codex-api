@@ -21,19 +21,47 @@ import indexHtml from '../pages/index.html';
 // Runtime default model (note: resets on each isolate restart in Workers)
 let runtimeDefaultModel = null;
 
-// Request logs (in-memory, resets on isolate restart)
-const requestLogs = [];
-const MAX_LOGS = 200;
+// D1 lazy init flag
+let dbInitialized = false;
 
-function addLog(entry) {
-  const log = {
-    id: requestLogs.length + 1,
-    time: new Date().toISOString(),
-    ...entry,
-  };
-  requestLogs.push(log);
-  if (requestLogs.length > MAX_LOGS) requestLogs.shift();
-  return log;
+async function ensureDbTable(env) {
+  if (dbInitialized || !env.DB) return;
+  try {
+    await env.DB.exec(`CREATE TABLE IF NOT EXISTS logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      time TEXT NOT NULL,
+      method TEXT,
+      path TEXT,
+      model TEXT,
+      resolved_model TEXT,
+      api TEXT,
+      stream INTEGER,
+      status INTEGER
+    )`);
+    dbInitialized = true;
+  } catch (e) {
+    console.error('DB init error:', e.message);
+  }
+}
+
+function addLog(env, ctx, entry) {
+  if (!env.DB) return;
+  ctx.waitUntil((async () => {
+    try {
+      await ensureDbTable(env);
+      await env.DB.prepare(
+        'INSERT INTO logs (time, method, path, model, resolved_model, api, stream, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      ).bind(
+        new Date().toISOString(),
+        entry.method, entry.path, entry.model, entry.resolvedModel,
+        entry.api, entry.stream ? 1 : 0, entry.status
+      ).run();
+      // Keep only last 200 logs
+      await env.DB.exec('DELETE FROM logs WHERE id NOT IN (SELECT id FROM logs ORDER BY id DESC LIMIT 200)');
+    } catch (e) {
+      console.error('DB write error:', e.message);
+    }
+  })());
 }
 
 function resolveModelWithRuntime(modelName, env) {
@@ -106,7 +134,7 @@ async function handleSetDefaultModel(request) {
   return jsonResponse({ success: true, model, message: `已强制使用模型: ${model}` });
 }
 
-async function handleResponses(request, env) {
+async function handleResponses(request, env, ctx) {
   try {
     const upstreamBase = env.UPSTREAM_BASE_URL || 'https://opencode.ai/zen/go';
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
@@ -137,7 +165,7 @@ async function handleResponses(request, env) {
 
     const response = await makeUpstreamRequest(upstreamUrl, upstreamBody, token, useAnthropic);
 
-    addLog({
+    addLog(env, ctx, {
       method: 'POST',
       path: '/v1/responses',
       model: originalModel,
@@ -209,7 +237,7 @@ async function handleResponses(request, env) {
   }
 }
 
-async function handleChatCompletions(request, env) {
+async function handleChatCompletions(request, env, ctx) {
   try {
     const upstreamBase = env.UPSTREAM_BASE_URL || 'https://opencode.ai/zen/go';
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
@@ -261,7 +289,7 @@ async function handleChatCompletions(request, env) {
 
     const response = await makeUpstreamRequest(upstreamUrl, upstreamBody, token, useAnthropic);
 
-    addLog({
+    addLog(env, ctx, {
       method: 'POST',
       path: '/v1/chat/completions',
       model: originalModel,
@@ -345,7 +373,7 @@ async function handleChatCompletions(request, env) {
 // ---- Main Fetch Handler ----
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     // Handle CORS preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders() });
@@ -372,22 +400,45 @@ export default {
     }
 
     if (path === '/api/logs' && request.method === 'GET') {
-      const since = parseInt(url.searchParams.get('since') || '0');
-      const logs = since ? requestLogs.filter(l => l.id > since) : requestLogs.slice(-50);
-      return jsonResponse({ logs, total: requestLogs.length });
+      if (!env.DB) return jsonResponse({ logs: [], total: 0 });
+      try {
+        await ensureDbTable(env);
+        const since = parseInt(url.searchParams.get('since') || '0');
+        const total = await env.DB.prepare('SELECT COUNT(*) as cnt FROM logs').first('cnt');
+        const result = since
+          ? await env.DB.prepare('SELECT * FROM logs WHERE id > ? ORDER BY id ASC LIMIT 100').bind(since).all()
+          : await env.DB.prepare('SELECT * FROM logs ORDER BY id DESC LIMIT 50').all();
+        const logs = (result.results || []).map(r => ({
+          id: r.id, time: r.time, method: r.method, path: r.path,
+          model: r.model, resolvedModel: r.resolved_model,
+          api: r.api, stream: !!r.stream, status: r.status,
+        }));
+        if (!since) logs.reverse();
+        return jsonResponse({ logs, total });
+      } catch (e) {
+        console.error('Logs read error:', e.message);
+        return jsonResponse({ logs: [], total: 0 });
+      }
     }
 
     if (path === '/api/logs' && request.method === 'DELETE') {
-      requestLogs.length = 0;
+      if (env.DB) {
+        try {
+          await ensureDbTable(env);
+          await env.DB.exec('DELETE FROM logs');
+        } catch (e) {
+          console.error('Logs clear error:', e.message);
+        }
+      }
       return jsonResponse({ success: true, message: '日志已清空' });
     }
 
     if (path === '/v1/responses' && request.method === 'POST') {
-      return handleResponses(request, env);
+      return handleResponses(request, env, ctx);
     }
 
     if (path === '/v1/chat/completions' && request.method === 'POST') {
-      return handleChatCompletions(request, env);
+      return handleChatCompletions(request, env, ctx);
     }
 
     // For /v1/* routes that don't match, return 404
