@@ -361,7 +361,7 @@ function convertRequestToAnthropic(body, resolvedModel) {
   const result = {
     model: resolvedModel,
     stream: body.stream || false,
-    max_tokens: body.max_output_tokens || body.max_tokens || 4096,
+    max_tokens: body.max_output_tokens || body.max_tokens || 250000,
     messages: anthropicMessages,
   };
 
@@ -984,7 +984,7 @@ function createChatCompletionsProxyHandler() {
           model: resolvedModel,
           messages: req.body.messages,
           stream: req.body.stream || false,
-          max_output_tokens: req.body.max_tokens || 4096,
+          max_output_tokens: req.body.max_tokens || 250000,
           temperature: req.body.temperature,
           top_p: req.body.top_p,
           stop: req.body.stop,
