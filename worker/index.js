@@ -137,36 +137,22 @@ async function handleResponses(request, env) {
         ? createAnthropicStreamConverter(originalModel)
         : createChatStreamConverter(originalModel);
 
-      const { readable, writable } = new TransformStream();
-      const writer = writable.getWriter();
       const encoder = new TextEncoder();
-      const reader = response.body.getReader();
       const decoder = new TextDecoder();
 
-      // Process stream in background
-      (async () => {
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) {
-              const remaining = converter.flush();
-              if (remaining) await writer.write(encoder.encode(remaining));
-              break;
-            }
-            const chunk = decoder.decode(value, { stream: true });
-            const converted = converter.process(chunk);
-            if (converted) await writer.write(encoder.encode(converted));
-          }
-        } catch (streamErr) {
-          console.error('Stream read error:', streamErr.message);
-          const errorEvent = `event: response.failed\ndata: ${JSON.stringify({ type: 'response.failed', response: { id: 'error', status: 'failed', error: { message: streamErr.message } } })}\n\n`;
-          await writer.write(encoder.encode(errorEvent));
-        } finally {
-          await writer.close();
-        }
-      })();
+      const transformed = response.body.pipeThrough(new TransformStream({
+        transform(chunk, controller) {
+          const text = decoder.decode(chunk, { stream: true });
+          const converted = converter.process(text);
+          if (converted) controller.enqueue(encoder.encode(converted));
+        },
+        flush(controller) {
+          const remaining = converter.flush();
+          if (remaining) controller.enqueue(encoder.encode(remaining));
+        },
+      }));
 
-      return new Response(readable, {
+      return new Response(transformed, {
         headers: {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
@@ -263,34 +249,23 @@ async function handleChatCompletions(request, env) {
     if (isStream) {
       if (useAnthropic) {
         const converter = createAnthropicToChatStreamConverter(resolvedModel);
-        const { readable, writable } = new TransformStream();
-        const writer = writable.getWriter();
         const encoder = new TextEncoder();
-        const reader = response.body.getReader();
         const decoder = new TextDecoder();
 
-        (async () => {
-          try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) {
-                const remaining = converter.flush();
-                if (remaining) await writer.write(encoder.encode(remaining));
-                await writer.write(encoder.encode('data: [DONE]\n\n'));
-                break;
-              }
-              const chunk = decoder.decode(value, { stream: true });
-              const converted = converter.process(chunk);
-              if (converted) await writer.write(encoder.encode(converted));
-            }
-          } catch (streamErr) {
-            console.error('Stream read error:', streamErr.message);
-          } finally {
-            await writer.close();
-          }
-        })();
+        const transformed = response.body.pipeThrough(new TransformStream({
+          transform(chunk, controller) {
+            const text = decoder.decode(chunk, { stream: true });
+            const converted = converter.process(text);
+            if (converted) controller.enqueue(encoder.encode(converted));
+          },
+          flush(controller) {
+            const remaining = converter.flush();
+            if (remaining) controller.enqueue(encoder.encode(remaining));
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          },
+        }));
 
-        return new Response(readable, {
+        return new Response(transformed, {
           headers: {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
