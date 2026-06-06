@@ -44,6 +44,34 @@
   .btn-save:hover { background: #2ea043; }
   .token-status { font-size: 12px; color: #8b949e; margin-top: 6px; }
   .token-status.ok { color: #3fb950; }
+  .logs-section { margin-top: 32px; }
+  .logs-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .logs-header .left { display: flex; align-items: center; gap: 12px; }
+  .logs-toggle { background: #21262d; color: #8b949e; border: 1px solid #30363d; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+  .logs-toggle.active { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+  .btn-clear-logs { background: #21262d; color: #8b949e; border: 1px solid #30363d; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+  .btn-clear-logs:hover { color: #f85149; border-color: #f85149; }
+  .logs-container { background: #0d1117; border: 1px solid #30363d; border-radius: 12px; max-height: 400px; overflow-y: auto; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px; }
+  .log-row { padding: 8px 14px; border-bottom: 1px solid #1b1f23; display: flex; gap: 10px; align-items: flex-start; }
+  .log-row:last-child { border-bottom: none; }
+  .log-row:hover { background: #161b22; }
+  .log-time { color: #484f58; white-space: nowrap; flex-shrink: 0; }
+  .log-method { font-weight: 600; flex-shrink: 0; min-width: 40px; }
+  .log-method.post { color: #3fb950; }
+  .log-method.get { color: #58a6ff; }
+  .log-path { color: #c9d1d9; flex-shrink: 0; }
+  .log-model { color: #d2a8ff; flex-shrink: 0; }
+  .log-arrow { color: #484f58; flex-shrink: 0; }
+  .log-resolved { color: #79c0ff; flex-shrink: 0; }
+  .log-tags { display: flex; gap: 4px; flex-shrink: 0; }
+  .log-tag { padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 500; }
+  .log-tag.stream { background: #1f3a28; color: #3fb950; }
+  .log-tag.api { background: #21262d; color: #8b949e; }
+  .log-status { font-weight: 600; flex-shrink: 0; }
+  .log-status.ok { color: #3fb950; }
+  .log-status.err { color: #f85149; }
+  .logs-empty { padding: 24px; text-align: center; color: #484f58; }
+  .logs-count { color: #484f58; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -77,6 +105,20 @@
   <div class="section-title">可用模型</div>
   <div class="model-grid" id="modelGrid">
     <div class="loading">加载模型列表中...</div>
+  </div>
+
+  <div class="logs-section">
+    <div class="logs-header">
+      <div class="left">
+        <div class="section-title" style="margin-bottom:0">请求日志</div>
+        <span class="logs-count" id="logsCount"></span>
+        <button class="logs-toggle active" id="btnAutoScroll" onclick="toggleAutoScroll()">自动滚动</button>
+      </div>
+      <button class="btn-clear-logs" onclick="clearLogs()">清空日志</button>
+    </div>
+    <div class="logs-container" id="logsContainer">
+      <div class="logs-empty">暂无请求日志</div>
+    </div>
   </div>
 </div>
 
@@ -220,6 +262,67 @@ function showToast(msg, isError) {
   toast.className = 'toast show' + (isError ? ' error' : '');
   setTimeout(function() { toast.className = 'toast'; }, 2500);
 }
+
+// Logs
+var lastLogId = 0;
+var autoScroll = true;
+var logsTimer = null;
+
+function toggleAutoScroll() {
+  autoScroll = !autoScroll;
+  var btn = document.getElementById('btnAutoScroll');
+  btn.className = 'logs-toggle' + (autoScroll ? ' active' : '');
+}
+
+function clearLogs() {
+  fetch('/api/logs', { method: 'DELETE' }).then(function(r) { return r.json(); }).then(function() {
+    lastLogId = 0;
+    document.getElementById('logsContainer').innerHTML = '<div class="logs-empty">暂无请求日志</div>';
+    document.getElementById('logsCount').textContent = '';
+    showToast('日志已清空');
+  });
+}
+
+function formatTime(iso) {
+  var d = new Date(iso);
+  return d.toLocaleTimeString('zh-CN', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+}
+
+function renderLog(log) {
+  var row = document.createElement('div');
+  row.className = 'log-row';
+  var statusOk = log.status >= 200 && log.status < 300;
+  row.innerHTML =
+    '<span class="log-time">' + formatTime(log.time) + '</span>' +
+    '<span class="log-method ' + (log.method === 'POST' ? 'post' : 'get') + '">' + log.method + '</span>' +
+    '<span class="log-path">' + log.path + '</span>' +
+    '<span class="log-model">' + log.model + '</span>' +
+    (log.resolvedModel && log.resolvedModel !== log.model ? '<span class="log-arrow">\u2192</span><span class="log-resolved">' + log.resolvedModel + '</span>' : '') +
+    '<span class="log-tags">' +
+      (log.stream ? '<span class="log-tag stream">stream</span>' : '') +
+      '<span class="log-tag api">' + log.api + '</span>' +
+    '</span>' +
+    '<span class="log-status ' + (statusOk ? 'ok' : 'err') + '">' + log.status + '</span>';
+  return row;
+}
+
+function fetchLogs() {
+  fetch('/api/logs?since=' + lastLogId).then(function(r) { return r.json(); }).then(function(data) {
+    if (!data.logs || data.logs.length === 0) return;
+    var container = document.getElementById('logsContainer');
+    var empty = container.querySelector('.logs-empty');
+    if (empty) empty.remove();
+    data.logs.forEach(function(log) {
+      container.appendChild(renderLog(log));
+      lastLogId = Math.max(lastLogId, log.id);
+    });
+    document.getElementById('logsCount').textContent = '\u5171 ' + data.total + ' \u6761';
+    if (autoScroll) container.scrollTop = container.scrollHeight;
+  }).catch(function() {});
+}
+
+logsTimer = setInterval(fetchLogs, 2000);
+fetchLogs();
 
 // Load token from localStorage on startup
 try {

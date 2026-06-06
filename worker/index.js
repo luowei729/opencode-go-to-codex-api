@@ -21,6 +21,21 @@ import indexHtml from '../pages/index.html';
 // Runtime default model (note: resets on each isolate restart in Workers)
 let runtimeDefaultModel = null;
 
+// Request logs (in-memory, resets on isolate restart)
+const requestLogs = [];
+const MAX_LOGS = 200;
+
+function addLog(entry) {
+  const log = {
+    id: requestLogs.length + 1,
+    time: new Date().toISOString(),
+    ...entry,
+  };
+  requestLogs.push(log);
+  if (requestLogs.length > MAX_LOGS) requestLogs.shift();
+  return log;
+}
+
 function resolveModelWithRuntime(modelName, env) {
   // 1. Runtime default (set via web UI - ephemeral in Workers)
   if (runtimeDefaultModel) {
@@ -121,6 +136,16 @@ async function handleResponses(request, env) {
     console.log(`[Responses] -> ${upstreamUrl} (model: ${originalModel} -> ${resolvedModel}, stream: ${isStream}, api: ${useAnthropic ? 'anthropic' : 'openai'})`);
 
     const response = await makeUpstreamRequest(upstreamUrl, upstreamBody, token, useAnthropic);
+
+    addLog({
+      method: 'POST',
+      path: '/v1/responses',
+      model: originalModel,
+      resolvedModel,
+      api: useAnthropic ? 'anthropic' : 'openai',
+      stream: isStream,
+      status: response.status,
+    });
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -236,6 +261,16 @@ async function handleChatCompletions(request, env) {
 
     const response = await makeUpstreamRequest(upstreamUrl, upstreamBody, token, useAnthropic);
 
+    addLog({
+      method: 'POST',
+      path: '/v1/chat/completions',
+      model: originalModel,
+      resolvedModel,
+      api: useAnthropic ? 'anthropic' : 'openai',
+      stream: isStream,
+      status: response.status,
+    });
+
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`Upstream error ${response.status}: ${errorText.substring(0, 500)}`);
@@ -334,6 +369,17 @@ export default {
 
     if (path === '/api/default-model' && request.method === 'POST') {
       return handleSetDefaultModel(request);
+    }
+
+    if (path === '/api/logs' && request.method === 'GET') {
+      const since = parseInt(url.searchParams.get('since') || '0');
+      const logs = since ? requestLogs.filter(l => l.id > since) : requestLogs.slice(-50);
+      return jsonResponse({ logs, total: requestLogs.length });
+    }
+
+    if (path === '/api/logs' && request.method === 'DELETE') {
+      requestLogs.length = 0;
+      return jsonResponse({ success: true, message: '日志已清空' });
     }
 
     if (path === '/v1/responses' && request.method === 'POST') {
