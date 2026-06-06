@@ -20,8 +20,9 @@ import {
 
 import indexHtml from '../pages/index.html';
 
-// Runtime default model (note: resets on each isolate restart in Workers)
+// Runtime default model - backed by D1 settings table
 let runtimeDefaultModel = null;
+let defaultModelLoaded = false;
 
 // Runtime custom model map (overrides DEFAULT_MODEL_MAP) - backed by D1
 const runtimeModelMap = {};
@@ -83,6 +84,18 @@ async function loadSettingsFromDb(env) {
     settingsLoaded = true;
   } catch (e) {
     console.error('Load settings error:', e.message);
+  }
+}
+
+async function loadDefaultModelFromDb(env) {
+  if (!env.DB || defaultModelLoaded) return;
+  try {
+    await ensureDbTable(env);
+    const row = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind('default_model').first();
+    runtimeDefaultModel = (row && row.value) ? row.value : null;
+    defaultModelLoaded = true;
+  } catch (e) {
+    console.error('Load default model error:', e.message);
   }
 }
 
@@ -191,20 +204,34 @@ async function handleModels(authHeader) {
 }
 
 async function handleGetDefaultModel(env) {
+  if (!defaultModelLoaded) await loadDefaultModelFromDb(env);
   return jsonResponse({
     runtimeDefault: runtimeDefaultModel,
     envDefault: env.DEFAULT_MODEL || null,
   });
 }
 
-async function handleSetDefaultModel(request) {
+async function handleSetDefaultModel(request, env) {
+  if (!defaultModelLoaded) await loadDefaultModelFromDb(env);
   const body = await request.json();
   const { model } = body;
   if (model === null || model === '' || model === undefined) {
     runtimeDefaultModel = null;
+    if (env.DB) {
+      try {
+        await ensureDbTable(env);
+        await env.DB.prepare('DELETE FROM settings WHERE key = ?').bind('default_model').run();
+      } catch (e) { console.error('Save default model error:', e.message); }
+    }
     return jsonResponse({ success: true, model: null, message: '已取消强制模型，使用客户端传入的模型' });
   }
   runtimeDefaultModel = model;
+  if (env.DB) {
+    try {
+      await ensureDbTable(env);
+      await env.DB.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').bind('default_model', model).run();
+    } catch (e) { console.error('Save default model error:', e.message); }
+  }
   return jsonResponse({ success: true, model, message: `已强制使用模型: ${model}` });
 }
 
@@ -212,6 +239,7 @@ async function handleResponses(request, env, ctx) {
   try {
     if (!modelMapLoaded) await loadModelMapFromDb(env);
     if (!settingsLoaded) await loadSettingsFromDb(env);
+    if (!defaultModelLoaded) await loadDefaultModelFromDb(env);
     const upstreamBase = getUpstreamUrl(env);
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
 
@@ -317,6 +345,7 @@ async function handleChatCompletions(request, env, ctx) {
   try {
     if (!modelMapLoaded) await loadModelMapFromDb(env);
     if (!settingsLoaded) await loadSettingsFromDb(env);
+    if (!defaultModelLoaded) await loadDefaultModelFromDb(env);
     const upstreamBase = getUpstreamUrl(env);
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
 
@@ -508,7 +537,7 @@ export default {
 
     if (path === '/api/default-model' && request.method === 'POST') {
       if (!checkAuth(request)) return jsonResponse({ error: { message: '未授权，请输入密码' } }, 401);
-      return handleSetDefaultModel(request);
+      return handleSetDefaultModel(request, env);
     }
 
     if (path === '/api/logs' && request.method === 'GET') {
