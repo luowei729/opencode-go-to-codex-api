@@ -259,7 +259,7 @@ function doLogin() {
   }).then(function(r) { return r.json(); }).then(function(data) {
     if (data.success) {
       adminPassword = pw;
-      try { localStorage.setItem('admin_password', pw); } catch(e) {}
+      try { localStorage.setItem('admin_password', pw); localStorage.setItem('admin_password_time', String(Date.now())); } catch(e) {}
       document.getElementById('authOverlay').style.display = 'none';
       document.getElementById('mainContent').style.display = '';
       initApp();
@@ -273,7 +273,7 @@ function doLogin() {
 
 function doLogout() {
   adminPassword = '';
-  try { localStorage.removeItem('admin_password'); } catch(e) {}
+  try { localStorage.removeItem('admin_password'); localStorage.removeItem('admin_password_time'); } catch(e) {}
   document.getElementById('mainContent').style.display = 'none';
   document.getElementById('authOverlay').style.display = '';
   document.getElementById('authPassword').value = '';
@@ -301,7 +301,7 @@ function doChangePassword() {
   }).then(function(r) { return r.json(); }).then(function(data) {
     if (data.success) {
       adminPassword = newPw;
-      try { localStorage.setItem('admin_password', newPw); } catch(e) {}
+      try { localStorage.setItem('admin_password', newPw); localStorage.setItem('admin_password_time', String(Date.now())); } catch(e) {}
       hideChangePassword();
       showToast('密码已修改');
     } else {
@@ -310,24 +310,32 @@ function doChangePassword() {
   }).catch(function(err) { showToast('修改失败: ' + err.message, true); });
 }
 
-// Try auto-login from localStorage
+// Try auto-login from localStorage (30 day validity)
+var PW_EXPIRY = 30 * 24 * 60 * 60 * 1000; // 30 days in ms
 try {
   var savedPw = localStorage.getItem('admin_password');
-  if (savedPw) {
+  var savedTime = parseInt(localStorage.getItem('admin_password_time') || '0');
+  if (savedPw && savedTime && (Date.now() - savedTime < PW_EXPIRY)) {
+    // Within 30 days, skip server verify
     adminPassword = savedPw;
-    // Verify password is still valid
+    document.getElementById('authOverlay').style.display = 'none';
+    document.getElementById('mainContent').style.display = '';
+    initApp();
+  } else if (savedPw) {
+    // Expired or no timestamp, verify with server
+    adminPassword = savedPw;
     fetch('/api/auth', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password: savedPw })
     }).then(function(r) { return r.json(); }).then(function(data) {
       if (data.success) {
+        try { localStorage.setItem('admin_password_time', String(Date.now())); } catch(e) {}
         document.getElementById('authOverlay').style.display = 'none';
         document.getElementById('mainContent').style.display = '';
         initApp();
       } else {
-        // Password changed, need re-login
-        try { localStorage.removeItem('admin_password'); } catch(e) {}
+        try { localStorage.removeItem('admin_password'); localStorage.removeItem('admin_password_time'); } catch(e) {}
         adminPassword = '';
       }
     }).catch(function() {});
