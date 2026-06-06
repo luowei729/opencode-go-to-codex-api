@@ -27,17 +27,7 @@ let dbInitialized = false;
 async function ensureDbTable(env) {
   if (dbInitialized || !env.DB) return;
   try {
-    await env.DB.exec(`CREATE TABLE IF NOT EXISTS logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      time TEXT NOT NULL,
-      method TEXT,
-      path TEXT,
-      model TEXT,
-      resolved_model TEXT,
-      api TEXT,
-      stream INTEGER,
-      status INTEGER
-    )`);
+    await env.DB.exec('CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT NOT NULL, method TEXT, path TEXT, model TEXT, resolved_model TEXT, api TEXT, stream INTEGER, status INTEGER)');
     dbInitialized = true;
   } catch (e) {
     console.error('DB init error:', e.message);
@@ -424,11 +414,7 @@ export default {
     if (path === '/api/db-test' && request.method === 'GET') {
       if (!env.DB) return jsonResponse({ error: 'DB binding not found. Check wrangler.toml d1_databases config.' });
       try {
-        await env.DB.exec(`CREATE TABLE IF NOT EXISTS logs (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          time TEXT NOT NULL, method TEXT, path TEXT, model TEXT,
-          resolved_model TEXT, api TEXT, stream INTEGER, status INTEGER
-        )`);
+        await env.DB.exec('CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT NOT NULL, method TEXT, path TEXT, model TEXT, resolved_model TEXT, api TEXT, stream INTEGER, status INTEGER)');
         await env.DB.prepare('INSERT INTO logs (time, method, path, model, resolved_model, api, stream, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(new Date().toISOString(), 'GET', '/api/db-test', 'test', 'test', 'openai', 0, 200).run();
         const count = await env.DB.prepare('SELECT COUNT(*) as cnt FROM logs').first('cnt');
         const rows = await env.DB.prepare('SELECT * FROM logs ORDER BY id DESC LIMIT 3').all();
