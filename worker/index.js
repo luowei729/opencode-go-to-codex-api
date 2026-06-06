@@ -32,6 +32,11 @@ let runtimeUpstreamUrl = null;
 let settingsLoaded = false;
 const DEFAULT_UPSTREAM = 'https://opencode.ai/zen/go';
 
+// Runtime password - backed by D1
+let runtimePassword = null;
+let passwordLoaded = false;
+const DEFAULT_PASSWORD = 'abcd.1234';
+
 // D1 lazy init flag
 let dbInitialized = false;
 
@@ -79,6 +84,28 @@ async function loadSettingsFromDb(env) {
   } catch (e) {
     console.error('Load settings error:', e.message);
   }
+}
+
+async function loadPasswordFromDb(env) {
+  if (!env.DB || passwordLoaded) return;
+  try {
+    await ensureDbTable(env);
+    const row = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind('web_password').first();
+    runtimePassword = (row && row.value) ? row.value : DEFAULT_PASSWORD;
+    passwordLoaded = true;
+  } catch (e) {
+    console.error('Load password error:', e.message);
+    runtimePassword = DEFAULT_PASSWORD;
+  }
+}
+
+function getPassword() {
+  return runtimePassword || DEFAULT_PASSWORD;
+}
+
+function checkAuth(request) {
+  const pw = request.headers.get('x-admin-password');
+  return pw === getPassword();
 }
 
 function getUpstreamUrl(env) {
@@ -442,11 +469,45 @@ export default {
       return handleModels(request.headers.get('authorization'));
     }
 
+    // Auth: login (verify password)
+    if (path === '/api/auth' && request.method === 'POST') {
+      if (!passwordLoaded) await loadPasswordFromDb(env);
+      const body = await request.json();
+      if (body.password === getPassword()) {
+        return jsonResponse({ success: true, message: '登录成功' });
+      }
+      return jsonResponse({ error: { message: '密码错误' } }, 401);
+    }
+
+    // Auth: change password
+    if (path === '/api/auth/change' && request.method === 'POST') {
+      if (!passwordLoaded) await loadPasswordFromDb(env);
+      const body = await request.json();
+      if (body.oldPassword !== getPassword()) {
+        return jsonResponse({ error: { message: '当前密码错误' } }, 401);
+      }
+      if (!body.newPassword || body.newPassword.length < 4) {
+        return jsonResponse({ error: { message: '新密码至少 4 位' } }, 400);
+      }
+      runtimePassword = body.newPassword;
+      if (env.DB) {
+        try {
+          await ensureDbTable(env);
+          await env.DB.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').bind('web_password', runtimePassword).run();
+        } catch (e) { console.error('Save password error:', e.message); }
+      }
+      return jsonResponse({ success: true, message: '密码已修改' });
+    }
+
+    // Load password for protected routes
+    if (!passwordLoaded) await loadPasswordFromDb(env);
+
     if (path === '/api/default-model' && request.method === 'GET') {
       return handleGetDefaultModel(env);
     }
 
     if (path === '/api/default-model' && request.method === 'POST') {
+      if (!checkAuth(request)) return jsonResponse({ error: { message: '未授权，请输入密码' } }, 401);
       return handleSetDefaultModel(request);
     }
 
@@ -473,6 +534,7 @@ export default {
     }
 
     if (path === '/api/logs' && request.method === 'DELETE') {
+      if (!checkAuth(request)) return jsonResponse({ error: { message: '未授权，请输入密码' } }, 401);
       if (env.DB) {
         try {
           await ensureDbTable(env);
@@ -493,6 +555,7 @@ export default {
     }
 
     if (path === '/api/model-map' && request.method === 'POST') {
+      if (!checkAuth(request)) return jsonResponse({ error: { message: '未授权，请输入密码' } }, 401);
       const body = await request.json();
       const { from, to } = body;
       if (!from || !to) {
@@ -509,6 +572,7 @@ export default {
     }
 
     if (path === '/api/model-map' && request.method === 'DELETE') {
+      if (!checkAuth(request)) return jsonResponse({ error: { message: '未授权，请输入密码' } }, 401);
       const body = await request.json();
       const { from } = body;
       if (!from) {
@@ -534,6 +598,7 @@ export default {
     }
 
     if (path === '/api/upstream-url' && request.method === 'POST') {
+      if (!checkAuth(request)) return jsonResponse({ error: { message: '未授权，请输入密码' } }, 401);
       const body = await request.json();
       const { url } = body;
       if (!url) {
@@ -551,6 +616,7 @@ export default {
     }
 
     if (path === '/api/upstream-url' && request.method === 'DELETE') {
+      if (!checkAuth(request)) return jsonResponse({ error: { message: '未授权，请输入密码' } }, 401);
       runtimeUpstreamUrl = null;
       settingsLoaded = true;
       if (env.DB) {

@@ -104,11 +104,49 @@
   .refresh-indicator { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 6px; vertical-align: middle; }
   .refresh-indicator.active { background: #3fb950; }
   .refresh-indicator.inactive { background: #484f58; }
+  .auth-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 200; }
+  .auth-box { background: #161b22; border: 1px solid #30363d; border-radius: 16px; padding: 32px; width: 360px; }
+  .auth-box h2 { font-size: 18px; color: #fff; margin-bottom: 16px; text-align: center; }
+  .auth-box input { width: 100%; background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 12px 14px; color: #e1e4e8; font-size: 15px; outline: none; margin-bottom: 12px; }
+  .auth-box input:focus { border-color: #58a6ff; }
+  .auth-box .btn-login { width: 100%; background: #238636; color: #fff; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 15px; font-weight: 600; }
+  .auth-box .btn-login:hover { background: #2ea043; }
+  .auth-box .auth-error { color: #f85149; font-size: 13px; text-align: center; margin-top: 8px; min-height: 20px; }
+  .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .header-bar .right { display: flex; gap: 8px; align-items: center; }
+  .btn-small { background: #21262d; color: #8b949e; border: 1px solid #30363d; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+  .btn-small:hover { color: #e1e4e8; border-color: #8b949e; }
+  .pw-modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 200; }
+  .pw-modal { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 24px; width: 340px; }
+  .pw-modal h3 { font-size: 16px; color: #fff; margin-bottom: 16px; }
+  .pw-modal label { display: block; font-size: 13px; color: #8b949e; margin-bottom: 4px; margin-top: 10px; }
+  .pw-modal input { width: 100%; background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 10px 12px; color: #e1e4e8; font-size: 14px; outline: none; }
+  .pw-modal input:focus { border-color: #58a6ff; }
+  .pw-modal .btn-row { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
 </style>
 </head>
 <body>
+
+<!-- Auth overlay -->
+<div class="auth-overlay" id="authOverlay">
+  <div class="auth-box">
+    <h2>🔒 请输入管理密码</h2>
+    <input type="password" id="authPassword" placeholder="请输入密码" autocomplete="off" onkeydown="if(event.key==='Enter')doLogin()" />
+    <button class="btn-login" onclick="doLogin()">登录</button>
+    <div class="auth-error" id="authError"></div>
+  </div>
+</div>
+
+<!-- Main content (hidden until auth) -->
+<div id="mainContent" style="display:none">
 <div class="container">
-  <h1>OpenCode Go API Proxy</h1>
+  <div class="header-bar">
+    <h1>OpenCode Go API Proxy</h1>
+    <div class="right">
+      <button class="btn-small" onclick="showChangePassword()">修改密码</button>
+      <button class="btn-small" onclick="doLogout()">退出登录</button>
+    </div>
+  </div>
   <p class="subtitle">选择要强制使用的模型，所有 API 请求将统一使用该模型</p>
 
   <div class="token-box">
@@ -183,6 +221,22 @@
     </div>
   </div>
 </div>
+</div>
+
+<!-- Change password modal -->
+<div class="pw-modal-overlay" id="pwModal" style="display:none">
+  <div class="pw-modal">
+    <h3>修改密码</h3>
+    <label>当前密码</label>
+    <input type="password" id="pwOld" autocomplete="off" />
+    <label>新密码（至少 4 位）</label>
+    <input type="password" id="pwNew" autocomplete="off" />
+    <div class="btn-row">
+      <button class="btn-small" onclick="hideChangePassword()">取消</button>
+      <button class="btn-save" onclick="doChangePassword()">确认修改</button>
+    </div>
+  </div>
+</div>
 
 <div class="toast" id="toast"></div>
 
@@ -190,8 +244,95 @@
 var ANTHROPIC_MODELS = ['minimax-m3', 'minimax-m2.7', 'minimax-m2.5', 'qwen3.7-max', 'qwen3.7-plus'];
 var currentRuntimeModel = null;
 var authToken = '';
+var adminPassword = '';
 var availableModels = [];
 var modelMapData = { modelMap: {} };
+
+// Auth functions
+function doLogin() {
+  var pw = document.getElementById('authPassword').value;
+  if (!pw) { document.getElementById('authError').textContent = '请输入密码'; return; }
+  fetch('/api/auth', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: pw })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.success) {
+      adminPassword = pw;
+      try { localStorage.setItem('admin_password', pw); } catch(e) {}
+      document.getElementById('authOverlay').style.display = 'none';
+      document.getElementById('mainContent').style.display = '';
+      initApp();
+    } else {
+      document.getElementById('authError').textContent = data.error?.message || '密码错误';
+    }
+  }).catch(function(err) {
+    document.getElementById('authError').textContent = '网络错误: ' + err.message;
+  });
+}
+
+function doLogout() {
+  adminPassword = '';
+  try { localStorage.removeItem('admin_password'); } catch(e) {}
+  document.getElementById('mainContent').style.display = 'none';
+  document.getElementById('authOverlay').style.display = '';
+  document.getElementById('authPassword').value = '';
+  document.getElementById('authError').textContent = '';
+}
+
+function getAdminHeaders() {
+  var h = {};
+  if (adminPassword) h['X-Admin-Password'] = adminPassword;
+  return h;
+}
+
+function showChangePassword() { document.getElementById('pwModal').style.display = ''; }
+function hideChangePassword() { document.getElementById('pwModal').style.display = 'none'; document.getElementById('pwOld').value = ''; document.getElementById('pwNew').value = ''; }
+
+function doChangePassword() {
+  var oldPw = document.getElementById('pwOld').value;
+  var newPw = document.getElementById('pwNew').value;
+  if (!oldPw) { showToast('请输入当前密码', true); return; }
+  if (!newPw || newPw.length < 4) { showToast('新密码至少 4 位', true); return; }
+  fetch('/api/auth/change', {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, getAdminHeaders()),
+    body: JSON.stringify({ oldPassword: oldPw, newPassword: newPw })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.success) {
+      adminPassword = newPw;
+      try { localStorage.setItem('admin_password', newPw); } catch(e) {}
+      hideChangePassword();
+      showToast('密码已修改');
+    } else {
+      showToast(data.error?.message || '修改失败', true);
+    }
+  }).catch(function(err) { showToast('修改失败: ' + err.message, true); });
+}
+
+// Try auto-login from localStorage
+try {
+  var savedPw = localStorage.getItem('admin_password');
+  if (savedPw) {
+    adminPassword = savedPw;
+    // Verify password is still valid
+    fetch('/api/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: savedPw })
+    }).then(function(r) { return r.json(); }).then(function(data) {
+      if (data.success) {
+        document.getElementById('authOverlay').style.display = 'none';
+        document.getElementById('mainContent').style.display = '';
+        initApp();
+      } else {
+        // Password changed, need re-login
+        try { localStorage.removeItem('admin_password'); } catch(e) {}
+        adminPassword = '';
+      }
+    }).catch(function() {});
+  }
+} catch(e) {}
 
 function isAnthropic(model) {
   return ANTHROPIC_MODELS.indexOf(model) !== -1;
@@ -282,7 +423,7 @@ function updateStatusBar() {
 function selectModel(model) {
   fetch('/api/default-model', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: Object.assign({ 'Content-Type': 'application/json' }, getAdminHeaders()),
     body: JSON.stringify({ model: model })
   }).then(function(r) { return r.json(); }).then(function(data) {
     if (data.success) {
@@ -306,7 +447,7 @@ function selectModel(model) {
 function clearModel() {
   fetch('/api/default-model', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: Object.assign({ 'Content-Type': 'application/json' }, getAdminHeaders()),
     body: JSON.stringify({ model: null })
   }).then(function(r) { return r.json(); }).then(function(data) {
     if (data.success) {
@@ -340,7 +481,7 @@ function toggleAutoScroll() {
 }
 
 function clearLogs() {
-  fetch('/api/logs', { method: 'DELETE' }).then(function(r) { return r.json(); }).then(function() {
+  fetch('/api/logs', { method: 'DELETE', headers: getAdminHeaders() }).then(function(r) { return r.json(); }).then(function() {
     lastLogId = 0;
     document.getElementById('logsContainer').innerHTML = '<div class="logs-empty">暂无请求日志</div>';
     document.getElementById('logsCount').textContent = '';
@@ -389,22 +530,27 @@ function fetchLogs() {
 logsTimer = setInterval(fetchLogs, 2000);
 fetchLogs();
 
-// Load token from localStorage on startup
-try {
-  var saved = localStorage.getItem('opencode_token');
-  if (saved) {
-    authToken = saved;
-    document.getElementById('tokenInput').value = saved;
-    document.getElementById('tokenStatus').textContent = '\u2713 \u5df2\u4ece\u672c\u5730\u5b58\u50a8\u52a0\u8f7d';
-    document.getElementById('tokenStatus').className = 'token-status ok';
-  }
-} catch(e) {}
-
-loadModels();
+// App init (called after auth)
+function initApp() {
+  // Load token from localStorage
+  try {
+    var saved = localStorage.getItem('opencode_token');
+    if (saved) {
+      authToken = saved;
+      document.getElementById('tokenInput').value = saved;
+      document.getElementById('tokenStatus').textContent = '\u2713 \u5df2\u4ece\u672c\u5730\u5b58\u50a8\u52a0\u8f7d';
+      document.getElementById('tokenStatus').className = 'token-status ok';
+    }
+  } catch(e) {}
+  loadModels();
+  loadModelMap();
+  loadUpstream();
+  fetchLogs();
+}
 
 // Auto-refresh models every 30 seconds
 setInterval(function() {
-  if (authToken) loadModels();
+  if (authToken && adminPassword) loadModels();
 }, 30000);
 
 // Model Map functions
@@ -455,7 +601,7 @@ function addMapping() {
   if (!to) { showToast('请选择目标模型', true); return; }
   fetch('/api/model-map', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: Object.assign({ 'Content-Type': 'application/json' }, getAdminHeaders()),
     body: JSON.stringify({ from: from, to: to })
   }).then(function(r) { return r.json(); }).then(function(data) {
     if (data.success) {
@@ -471,7 +617,7 @@ function addMapping() {
 function deleteMapping(from) {
   fetch('/api/model-map', {
     method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
+    headers: Object.assign({ 'Content-Type': 'application/json' }, getAdminHeaders()),
     body: JSON.stringify({ from: from })
   }).then(function(r) { return r.json(); }).then(function(data) {
     if (data.success) {
@@ -503,7 +649,7 @@ function saveUpstream() {
   if (!url) { showToast('请输入上游 API 地址', true); return; }
   fetch('/api/upstream-url', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: Object.assign({ 'Content-Type': 'application/json' }, getAdminHeaders()),
     body: JSON.stringify({ url: url })
   }).then(function(r) { return r.json(); }).then(function(data) {
     if (data.success) {
@@ -517,7 +663,7 @@ function saveUpstream() {
 }
 
 function resetUpstream() {
-  fetch('/api/upstream-url', { method: 'DELETE' }).then(function(r) { return r.json(); }).then(function(data) {
+  fetch('/api/upstream-url', { method: 'DELETE', headers: getAdminHeaders() }).then(function(r) { return r.json(); }).then(function(data) {
     if (data.success) {
       showToast(data.message);
       loadUpstream();
@@ -525,8 +671,6 @@ function resetUpstream() {
     }
   }).catch(function(err) { showToast('重置失败: ' + err.message, true); });
 }
-
-loadUpstream();
 
 // Edit mapping inline
 function editMapping(from, currentTo) {
@@ -550,7 +694,7 @@ function saveEditMapping(from) {
   if (!to) { showToast('请选择目标模型', true); return; }
   fetch('/api/model-map', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: Object.assign({ 'Content-Type': 'application/json' }, getAdminHeaders()),
     body: JSON.stringify({ from: from, to: to })
   }).then(function(r) { return r.json(); }).then(function(data) {
     if (data.success) {
@@ -561,8 +705,6 @@ function saveEditMapping(from) {
     }
   }).catch(function(err) { showToast('保存失败: ' + err.message, true); });
 }
-
-loadModelMap();
 </script>
 </body>
 </html>
