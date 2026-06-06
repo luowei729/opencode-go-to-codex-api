@@ -369,14 +369,22 @@ function convertRequestToAnthropic(body, resolvedModel) {
   if (body.temperature !== undefined) result.temperature = body.temperature;
   if (body.top_p !== undefined) result.top_p = body.top_p;
   if (body.stop !== undefined) result.stop_sequences = Array.isArray(body.stop) ? body.stop : [body.stop];
-  if (body.tools !== undefined) result.tools = convertToolsToAnthropic(body.tools);
-  if (body.tool_choice !== undefined) {
-    // Convert to Anthropic tool_choice format
-    if (body.tool_choice === 'auto') result.tool_choice = { type: 'auto' };
-    else if (body.tool_choice === 'none') result.tool_choice = { type: 'none' };
-    else if (body.tool_choice === 'required') result.tool_choice = { type: 'any' };
-    else if (typeof body.tool_choice === 'object' && body.tool_choice.name) {
-      result.tool_choice = { type: 'tool', name: body.tool_choice.name };
+
+  // Only include tools if defined AND non-empty
+  // Upstream returns 500 if tool_choice is sent without tools
+  const convertedTools = body.tools !== undefined ? convertToolsToAnthropic(body.tools) : undefined;
+  if (convertedTools && convertedTools.length > 0) {
+    result.tools = convertedTools;
+
+    // Only include tool_choice if tools are present
+    if (body.tool_choice !== undefined) {
+      // Convert to Anthropic tool_choice format
+      if (body.tool_choice === 'auto') result.tool_choice = { type: 'auto' };
+      else if (body.tool_choice === 'none') result.tool_choice = { type: 'none' };
+      else if (body.tool_choice === 'required') result.tool_choice = { type: 'any' };
+      else if (typeof body.tool_choice === 'object' && body.tool_choice.name) {
+        result.tool_choice = { type: 'tool', name: body.tool_choice.name };
+      }
     }
   }
 
@@ -707,6 +715,8 @@ async function makeUpstreamRequest(url, body, token, useAnthropic) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
+  const bodyStr = JSON.stringify(body);
+
   // Add timeout for connection establishment (5 minutes for long-running requests)
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 300000);
@@ -715,7 +725,7 @@ async function makeUpstreamRequest(url, body, token, useAnthropic) {
     const response = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify(body),
+      body: bodyStr,
       signal: controller.signal,
     });
     return response;
