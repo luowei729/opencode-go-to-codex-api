@@ -204,7 +204,16 @@ async function handleModels(authHeader) {
 }
 
 async function handleGetDefaultModel(env) {
-  if (!defaultModelLoaded) await loadDefaultModelFromDb(env);
+  // Always read fresh from D1 to ensure cross-isolate consistency
+  if (env.DB) {
+    try {
+      await ensureDbTable(env);
+      const row = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind('default_model').first();
+      runtimeDefaultModel = (row && row.value) ? row.value : null;
+    } catch (e) {
+      console.error('Load default model error:', e.message);
+    }
+  }
   return jsonResponse({
     runtimeDefault: runtimeDefaultModel,
     envDefault: env.DEFAULT_MODEL || null,
