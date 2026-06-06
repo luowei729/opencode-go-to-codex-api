@@ -2,11 +2,12 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-COPY package.json ./
+COPY package.json package-lock.json ./
 RUN npm install --production
 
 COPY src/ ./src/
-COPY .env ./
+COPY pages/ ./pages/
+COPY .env ./.env
 
 EXPOSE 30001
 
