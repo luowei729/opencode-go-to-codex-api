@@ -86,6 +86,13 @@
   .map-type.custom { background: #1f3a28; color: #3fb950; }
   .map-btn-del { background: none; border: 1px solid #30363d; color: #8b949e; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 11px; }
   .map-btn-del:hover { color: #f85149; border-color: #f85149; }
+  .map-btn-edit { background: none; border: 1px solid #30363d; color: #8b949e; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 11px; margin-right: 4px; }
+  .map-btn-edit:hover { color: #58a6ff; border-color: #58a6ff; }
+  .map-inline-edit { display: flex; gap: 4px; align-items: center; }
+  .map-inline-edit select { background: #0d1117; border: 1px solid #58a6ff; border-radius: 6px; padding: 4px 8px; color: #e1e4e8; font-size: 12px; font-family: monospace; outline: none; }
+  .map-inline-edit .btn-mini { padding: 4px 8px; border-radius: 6px; border: none; cursor: pointer; font-size: 11px; }
+  .map-inline-edit .btn-ok { background: #238636; color: #fff; }
+  .map-inline-edit .btn-cancel { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
   .map-add-row { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
   .map-add-row input, .map-add-row select { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 8px 12px; color: #e1e4e8; font-size: 13px; font-family: monospace; outline: none; }
   .map-add-row input:focus, .map-add-row select:focus { border-color: #58a6ff; }
@@ -103,6 +110,16 @@
 <div class="container">
   <h1>OpenCode Go API Proxy</h1>
   <p class="subtitle">选择要强制使用的模型，所有 API 请求将统一使用该模型</p>
+
+  <div class="token-box">
+    <label>上游 API 地址（所有请求转发到此地址，留空使用默认值）</label>
+    <div class="token-input-row">
+      <input id="upstreamInput" placeholder="https://opencode.ai/zen/go" autocomplete="off" />
+      <button class="btn-save" onclick="saveUpstream()">保存</button>
+      <button class="btn-clear" onclick="resetUpstream()" id="btnResetUpstream" disabled>恢复默认</button>
+    </div>
+    <div class="token-status" id="upstreamStatus"></div>
+  </div>
 
   <div class="token-box">
     <label>OpenCode Go Token（您的密钥仅存储在浏览器本地，不会上传到服务端）</label>
@@ -139,7 +156,7 @@
       例: 客户端请求 <code>gpt-4o</code> → 实际使用 <code>kimi-k2.6</code>
     </div>
     <table class="map-table">
-      <thead><tr><th>请求模型</th><th style="width:30px"></th><th>实际模型</th><th style="width:60px">类型</th><th style="width:50px">操作</th></tr></thead>
+      <thead><tr><th>请求模型</th><th style="width:30px"></th><th>实际模型</th><th style="width:60px">类型</th><th style="width:90px">操作</th></tr></thead>
       <tbody id="mapTableBody">
         <tr><td colspan="5" style="text-align:center;color:#484f58;padding:20px">加载中...</td></tr>
       </tbody>
@@ -411,9 +428,9 @@ function renderModelMap() {
     tr.innerHTML =
       '<td class="map-from">' + from + '</td>' +
       '<td class="map-arrow">\u2192</td>' +
-      '<td class="map-to">' + customMap[from] + '</td>' +
+      '<td class="map-to" id="map-td-' + from + '">' + customMap[from] + '</td>' +
       '<td><span class="map-type custom">自定义</span></td>' +
-      '<td><button class="map-btn-del" onclick="deleteMapping(\'' + from + '\')">删除</button></td>';
+      '<td id="map-action-' + from + '"><button class="map-btn-edit" onclick="editMapping(\'' + from + '\',\'' + customMap[from] + '\')">\u7f16\u8f91</button><button class="map-btn-del" onclick="deleteMapping(\'' + from + '\')">\u5220\u9664</button></td>';
     tbody.appendChild(tr);
   });
 
@@ -427,9 +444,9 @@ function renderModelMap() {
     tr.innerHTML =
       '<td class="map-from">' + from + '</td>' +
       '<td class="map-arrow">\u2192</td>' +
-      '<td class="map-to">' + to + (overridden ? ' (\u5df2\u8986\u76d6)' : '') + '</td>' +
+      '<td class="map-to" id="map-td-' + from + '">' + to + (overridden ? ' (\u5df2\u8986\u76d6)' : '') + '</td>' +
       '<td><span class="map-type default">默认</span></td>' +
-      '<td></td>';
+      '<td id="map-action-' + from + '"><button class="map-btn-edit" onclick="editMapping(\'' + from + '\',\'' + to + '\')">\u7f16\u8f91</button></td>';
     tbody.appendChild(tr);
   });
 
@@ -481,6 +498,87 @@ function deleteMapping(from) {
       loadModelMap();
     }
   }).catch(function(err) { showToast('删除失败: ' + err.message, true); });
+}
+
+// Upstream URL functions
+function loadUpstream() {
+  fetch('/api/upstream-url').then(function(r) { return r.json(); }).then(function(data) {
+    document.getElementById('upstreamInput').value = data.custom || '';
+    document.getElementById('upstreamInput').placeholder = data.default;
+    var btn = document.getElementById('btnResetUpstream');
+    btn.disabled = !data.custom;
+    if (data.custom) {
+      document.getElementById('upstreamStatus').textContent = '\u2713 \u5df2\u8bbe\u7f6e\u4e3a: ' + data.current;
+      document.getElementById('upstreamStatus').className = 'token-status ok';
+    } else {
+      document.getElementById('upstreamStatus').textContent = '\u4f7f\u7528\u9ed8\u8ba4\u5730\u5740: ' + data.default;
+      document.getElementById('upstreamStatus').className = 'token-status';
+    }
+  }).catch(function() {});
+}
+
+function saveUpstream() {
+  var url = document.getElementById('upstreamInput').value.trim();
+  if (!url) { showToast('请输入上游 API 地址', true); return; }
+  fetch('/api/upstream-url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: url })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.success) {
+      showToast(data.message);
+      loadUpstream();
+      loadModels();
+    } else {
+      showToast(data.error?.message || '设置失败', true);
+    }
+  }).catch(function(err) { showToast('设置失败: ' + err.message, true); });
+}
+
+function resetUpstream() {
+  fetch('/api/upstream-url', { method: 'DELETE' }).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.success) {
+      showToast(data.message);
+      loadUpstream();
+      loadModels();
+    }
+  }).catch(function(err) { showToast('重置失败: ' + err.message, true); });
+}
+
+loadUpstream();
+
+// Edit mapping inline
+function editMapping(from, currentTo) {
+  var td = document.getElementById('map-td-' + from);
+  var actionTd = document.getElementById('map-action-' + from);
+  if (!td || !actionTd) return;
+  var html = '<div class="map-inline-edit"><select id="map-edit-select-' + from + '">';
+  availableModels.forEach(function(m) {
+    html += '<option value="' + m + '"' + (m === currentTo ? ' selected' : '') + '>' + m + '</option>';
+  });
+  html += '</select><button class="btn-mini btn-ok" onclick="saveEditMapping(\'' + from + '\')">\u2713</button>';
+  html += '<button class="btn-mini btn-cancel" onclick="loadModelMap()">\u2715</button></div>';
+  td.innerHTML = html;
+  actionTd.innerHTML = '';
+}
+
+function saveEditMapping(from) {
+  var select = document.getElementById('map-edit-select-' + from);
+  if (!select) return;
+  var to = select.value;
+  if (!to) { showToast('请选择目标模型', true); return; }
+  fetch('/api/model-map', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: from, to: to })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.success) {
+      showToast(data.message);
+      loadModelMap();
+    } else {
+      showToast(data.error?.message || '保存失败', true);
+    }
+  }).catch(function(err) { showToast('保存失败: ' + err.message, true); });
 }
 
 loadModelMap();

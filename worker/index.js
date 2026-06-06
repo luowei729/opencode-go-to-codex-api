@@ -27,6 +27,11 @@ let runtimeDefaultModel = null;
 const runtimeModelMap = {};
 let modelMapLoaded = false;
 
+// Runtime upstream URL - backed by D1
+let runtimeUpstreamUrl = null;
+let settingsLoaded = false;
+const DEFAULT_UPSTREAM = 'https://opencode.ai/zen/go';
+
 // D1 lazy init flag
 let dbInitialized = false;
 
@@ -35,6 +40,7 @@ async function ensureDbTable(env) {
   try {
     await env.DB.exec('CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT NOT NULL, method TEXT, path TEXT, model TEXT, resolved_model TEXT, api TEXT, stream INTEGER, status INTEGER)');
     await env.DB.exec('CREATE TABLE IF NOT EXISTS model_map (from_model TEXT PRIMARY KEY, to_model TEXT NOT NULL)');
+    await env.DB.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
     dbInitialized = true;
   } catch (e) {
     console.error('DB init error:', e.message);
@@ -53,6 +59,23 @@ async function loadModelMapFromDb(env) {
   } catch (e) {
     console.error('Load model map error:', e.message);
   }
+}
+
+async function loadSettingsFromDb(env) {
+  if (!env.DB || settingsLoaded) return;
+  try {
+    await ensureDbTable(env);
+    const row = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind('upstream_url').first();
+    if (row && row.value) runtimeUpstreamUrl = row.value;
+    settingsLoaded = true;
+  } catch (e) {
+    console.error('Load settings error:', e.message);
+  }
+}
+
+function getUpstreamUrl(env) {
+  if (runtimeUpstreamUrl) return runtimeUpstreamUrl;
+  return env.UPSTREAM_BASE_URL || DEFAULT_UPSTREAM;
 }
 
 function addLog(env, ctx, entry) {
@@ -152,7 +175,8 @@ async function handleSetDefaultModel(request) {
 async function handleResponses(request, env, ctx) {
   try {
     if (!modelMapLoaded) await loadModelMapFromDb(env);
-    const upstreamBase = env.UPSTREAM_BASE_URL || 'https://opencode.ai/zen/go';
+    if (!settingsLoaded) await loadSettingsFromDb(env);
+    const upstreamBase = getUpstreamUrl(env);
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
 
     if (!token) {
@@ -256,7 +280,8 @@ async function handleResponses(request, env, ctx) {
 async function handleChatCompletions(request, env, ctx) {
   try {
     if (!modelMapLoaded) await loadModelMapFromDb(env);
-    const upstreamBase = env.UPSTREAM_BASE_URL || 'https://opencode.ai/zen/go';
+    if (!settingsLoaded) await loadSettingsFromDb(env);
+    const upstreamBase = getUpstreamUrl(env);
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
 
     if (!token) {
@@ -491,6 +516,44 @@ export default {
         } catch (e) { console.error('Delete model map error:', e.message); }
       }
       return jsonResponse({ success: true, message: `已删除映射: ${from}`, customMap: { ...runtimeModelMap } });
+    }
+
+    if (path === '/api/upstream-url' && request.method === 'GET') {
+      if (!settingsLoaded && env.DB) await loadSettingsFromDb(env);
+      return jsonResponse({
+        current: getUpstreamUrl(env),
+        default: DEFAULT_UPSTREAM,
+        custom: runtimeUpstreamUrl || null,
+      });
+    }
+
+    if (path === '/api/upstream-url' && request.method === 'POST') {
+      const body = await request.json();
+      const { url } = body;
+      if (!url) {
+        return jsonResponse({ error: { message: 'url 字段必填' } }, 400);
+      }
+      runtimeUpstreamUrl = url.replace(/\/+$/, '');
+      if (env.DB) {
+        try {
+          await ensureDbTable(env);
+          await env.DB.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').bind('upstream_url', runtimeUpstreamUrl).run();
+        } catch (e) { console.error('Save upstream url error:', e.message); }
+      }
+      settingsLoaded = true;
+      return jsonResponse({ success: true, message: `上游地址已设置为: ${runtimeUpstreamUrl}`, url: runtimeUpstreamUrl });
+    }
+
+    if (path === '/api/upstream-url' && request.method === 'DELETE') {
+      runtimeUpstreamUrl = null;
+      settingsLoaded = true;
+      if (env.DB) {
+        try {
+          await ensureDbTable(env);
+          await env.DB.prepare('DELETE FROM settings WHERE key = ?').bind('upstream_url').run();
+        } catch (e) { console.error('Delete upstream url error:', e.message); }
+      }
+      return jsonResponse({ success: true, message: '已恢复默认上游地址', url: env.UPSTREAM_BASE_URL || DEFAULT_UPSTREAM });
     }
 
     if (path === '/v1/responses' && request.method === 'POST') {
