@@ -14,6 +14,7 @@ const DEFAULT_MODEL_MAP = {
   'gpt-5.5': 'qwen3.7-max',
   'gpt-5': 'qwen3.7-max',
   'gpt-5.4': 'qwen3.7-plus',
+  'gpt-5.4-mini': 'qwen3.7-plus',
   'gpt-4': 'kimi-k2.6',
   'gpt-4o': 'kimi-k2.6',
   'gpt-4o-mini': 'deepseek-v4-flash',
@@ -361,7 +362,7 @@ function convertRequestToAnthropic(body, resolvedModel) {
   const result = {
     model: resolvedModel,
     stream: body.stream || false,
-    max_tokens: body.max_output_tokens || body.max_tokens || 250000,
+    max_tokens: body.max_output_tokens || body.max_tokens || 64000,
     messages: anthropicMessages,
   };
 
@@ -984,7 +985,7 @@ function createChatCompletionsProxyHandler() {
           model: resolvedModel,
           messages: req.body.messages,
           stream: req.body.stream || false,
-          max_output_tokens: req.body.max_tokens || 250000,
+          max_output_tokens: req.body.max_tokens || 64000,
           temperature: req.body.temperature,
           top_p: req.body.top_p,
           stop: req.body.stop,
