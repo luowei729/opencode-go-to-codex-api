@@ -8,7 +8,7 @@ RUN npm install --production
 COPY src/ ./src/
 COPY .env ./
 
-EXPOSE 3000
+EXPOSE 30001
 
 ENV NODE_ENV=production
 
