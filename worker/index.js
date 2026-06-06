@@ -400,7 +400,7 @@ export default {
     }
 
     if (path === '/api/logs' && request.method === 'GET') {
-      if (!env.DB) return jsonResponse({ logs: [], total: 0 });
+      if (!env.DB) return jsonResponse({ logs: [], total: 0, error: 'DB binding not found' });
       try {
         await ensureDbTable(env);
         const since = parseInt(url.searchParams.get('since') || '0');
@@ -417,7 +417,24 @@ export default {
         return jsonResponse({ logs, total });
       } catch (e) {
         console.error('Logs read error:', e.message);
-        return jsonResponse({ logs: [], total: 0 });
+        return jsonResponse({ logs: [], total: 0, error: e.message });
+      }
+    }
+
+    if (path === '/api/db-test' && request.method === 'GET') {
+      if (!env.DB) return jsonResponse({ error: 'DB binding not found. Check wrangler.toml d1_databases config.' });
+      try {
+        await env.DB.exec(`CREATE TABLE IF NOT EXISTS logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          time TEXT NOT NULL, method TEXT, path TEXT, model TEXT,
+          resolved_model TEXT, api TEXT, stream INTEGER, status INTEGER
+        )`);
+        await env.DB.prepare('INSERT INTO logs (time, method, path, model, resolved_model, api, stream, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(new Date().toISOString(), 'GET', '/api/db-test', 'test', 'test', 'openai', 0, 200).run();
+        const count = await env.DB.prepare('SELECT COUNT(*) as cnt FROM logs').first('cnt');
+        const rows = await env.DB.prepare('SELECT * FROM logs ORDER BY id DESC LIMIT 3').all();
+        return jsonResponse({ success: true, count, recent: rows.results });
+      } catch (e) {
+        return jsonResponse({ error: e.message, stack: e.stack });
       }
     }
 
