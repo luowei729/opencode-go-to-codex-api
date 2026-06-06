@@ -147,20 +147,15 @@ function addLog(env, ctx, entry) {
 }
 
 function resolveModelWithRuntime(modelName, env) {
-  // 1. Runtime default (forced model from web UI)
+  // 1. Forced model: always use it, bypass mapping entirely
   if (runtimeDefaultModel) {
-    const forced = runtimeDefaultModel.replace(/^opencode-go\//, '');
-    // Check if forced model has a mapping, use mapped value if so
-    if (runtimeModelMap[forced]) {
-      return runtimeModelMap[forced].replace(/^opencode-go\//, '');
-    }
-    return forced;
+    return runtimeDefaultModel.replace(/^opencode-go\//, '');
   }
-  // 2. D1-backed model map
+  // 2. No forced model: use model mapping
   if (runtimeModelMap[modelName]) {
     return runtimeModelMap[modelName].replace(/^opencode-go\//, '');
   }
-  // 3. Fall back to original model name
+  // 3. No mapping found: use client model as-is
   return modelName.replace(/^opencode-go\//, '');
 }
 
