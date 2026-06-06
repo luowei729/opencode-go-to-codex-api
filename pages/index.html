@@ -152,11 +152,11 @@
   <div class="map-section">
     <div class="section-title">模型映射配置</div>
     <div class="info-box" style="margin-bottom: 12px;">
-      当客户端请求左侧模型时，自动转换为右侧实际模型。自定义映射优先级高于默认映射。<br>
+      当客户端请求左侧模型时，自动转换为右侧实际模型。所有映射均可编辑和删除。<br>
       例: 客户端请求 <code>gpt-4o</code> → 实际使用 <code>kimi-k2.6</code>
     </div>
     <table class="map-table">
-      <thead><tr><th>请求模型</th><th style="width:30px"></th><th>实际模型</th><th style="width:60px">类型</th><th style="width:90px">操作</th></tr></thead>
+      <thead><tr><th>请求模型</th><th style="width:30px"></th><th>实际模型</th><th style="width:120px">操作</th></tr></thead>
       <tbody id="mapTableBody">
         <tr><td colspan="5" style="text-align:center;color:#484f58;padding:20px">加载中...</td></tr>
       </tbody>
@@ -191,7 +191,7 @@ var ANTHROPIC_MODELS = ['minimax-m3', 'minimax-m2.7', 'minimax-m2.5', 'qwen3.7-m
 var currentRuntimeModel = null;
 var authToken = '';
 var availableModels = [];
-var modelMapData = { defaultMap: {}, customMap: {} };
+var modelMapData = { modelMap: {} };
 
 function isAnthropic(model) {
   return ANTHROPIC_MODELS.indexOf(model) !== -1;
@@ -418,40 +418,21 @@ function loadModelMap() {
 function renderModelMap() {
   var tbody = document.getElementById('mapTableBody');
   tbody.innerHTML = '';
-  var defaultMap = modelMapData.defaultMap || {};
-  var customMap = modelMapData.customMap || {};
+  var modelMap = modelMapData.modelMap || {};
+  var keys = Object.keys(modelMap).sort();
 
-  // Custom mappings first
-  var customKeys = Object.keys(customMap).sort();
-  customKeys.forEach(function(from) {
+  keys.forEach(function(from) {
     var tr = document.createElement('tr');
     tr.innerHTML =
       '<td class="map-from">' + from + '</td>' +
       '<td class="map-arrow">\u2192</td>' +
-      '<td class="map-to" id="map-td-' + from + '">' + customMap[from] + '</td>' +
-      '<td><span class="map-type custom">自定义</span></td>' +
-      '<td id="map-action-' + from + '"><button class="map-btn-edit" onclick="editMapping(\'' + from + '\',\'' + customMap[from] + '\')">\u7f16\u8f91</button><button class="map-btn-del" onclick="deleteMapping(\'' + from + '\')">\u5220\u9664</button></td>';
+      '<td class="map-to" id="map-td-' + from + '">' + modelMap[from] + '</td>' +
+      '<td id="map-action-' + from + '"><button class="map-btn-edit" onclick="editMapping(\'' + from + '\',\'' + modelMap[from] + '\')">\u7f16\u8f91</button><button class="map-btn-del" onclick="deleteMapping(\'' + from + '\')">\u5220\u9664</button></td>';
     tbody.appendChild(tr);
   });
 
-  // Default mappings
-  var defaultKeys = Object.keys(defaultMap).sort();
-  defaultKeys.forEach(function(from) {
-    var overridden = customMap[from] ? true : false;
-    var to = overridden ? customMap[from] : defaultMap[from];
-    var tr = document.createElement('tr');
-    tr.style.opacity = overridden ? '0.5' : '1';
-    tr.innerHTML =
-      '<td class="map-from">' + from + '</td>' +
-      '<td class="map-arrow">\u2192</td>' +
-      '<td class="map-to" id="map-td-' + from + '">' + to + (overridden ? ' (\u5df2\u8986\u76d6)' : '') + '</td>' +
-      '<td><span class="map-type default">默认</span></td>' +
-      '<td id="map-action-' + from + '"><button class="map-btn-edit" onclick="editMapping(\'' + from + '\',\'' + to + '\')">\u7f16\u8f91</button></td>';
-    tbody.appendChild(tr);
-  });
-
-  if (customKeys.length === 0 && defaultKeys.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#484f58;padding:20px">\u6682\u65e0\u6620\u5c04\u914d\u7f6e</td></tr>';
+  if (keys.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#484f58;padding:20px">\u6682\u65e0\u6620\u5c04\u914d\u7f6e\uff0c\u8bf7\u6dfb\u52a0</td></tr>';
   }
 
   // Update mapTo dropdown

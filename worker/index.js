@@ -52,8 +52,16 @@ async function loadModelMapFromDb(env) {
   try {
     await ensureDbTable(env);
     const result = await env.DB.prepare('SELECT * FROM model_map').all();
-    for (const row of (result.results || [])) {
-      runtimeModelMap[row.from_model] = row.to_model;
+    // Seed D1 with DEFAULT_MODEL_MAP on first use
+    if ((result.results || []).length === 0) {
+      for (const [from, to] of Object.entries(DEFAULT_MODEL_MAP)) {
+        await env.DB.prepare('INSERT OR REPLACE INTO model_map (from_model, to_model) VALUES (?, ?)').bind(from, to).run();
+        runtimeModelMap[from] = to;
+      }
+    } else {
+      for (const row of (result.results || [])) {
+        runtimeModelMap[row.from_model] = row.to_model;
+      }
     }
     modelMapLoaded = true;
   } catch (e) {
@@ -103,11 +111,12 @@ function resolveModelWithRuntime(modelName, env) {
   if (runtimeDefaultModel) {
     return runtimeDefaultModel.replace(/^opencode-go\//, '');
   }
-  // 2. Runtime custom map (set via web UI)
+  // 2. D1-backed model map (all mappings managed here)
   if (runtimeModelMap[modelName]) {
     return runtimeModelMap[modelName].replace(/^opencode-go\//, '');
   }
-  return resolveModel(modelName, env);
+  // 3. Fall back to original model name (no hardcoded mapping)
+  return modelName.replace(/^opencode-go\//, '');
 }
 
 function corsHeaders() {
@@ -477,11 +486,8 @@ export default {
 
     if (path === '/api/model-map' && request.method === 'GET') {
       if (!modelMapLoaded && env.DB) await loadModelMapFromDb(env);
-      const defaultMap = {};
-      for (const [k, v] of Object.entries(DEFAULT_MODEL_MAP)) defaultMap[k] = v;
       return jsonResponse({
-        defaultMap,
-        customMap: { ...runtimeModelMap },
+        modelMap: { ...runtimeModelMap },
         anthropicModels: [...ANTHROPIC_MODELS],
       });
     }
@@ -499,7 +505,7 @@ export default {
           await env.DB.prepare('INSERT OR REPLACE INTO model_map (from_model, to_model) VALUES (?, ?)').bind(from, to).run();
         } catch (e) { console.error('Save model map error:', e.message); }
       }
-      return jsonResponse({ success: true, message: `已添加映射: ${from} \u2192 ${to}`, customMap: { ...runtimeModelMap } });
+      return jsonResponse({ success: true, message: `已添加映射: ${from} \u2192 ${to}`, modelMap: { ...runtimeModelMap } });
     }
 
     if (path === '/api/model-map' && request.method === 'DELETE') {
@@ -515,7 +521,7 @@ export default {
           await env.DB.prepare('DELETE FROM model_map WHERE from_model = ?').bind(from).run();
         } catch (e) { console.error('Delete model map error:', e.message); }
       }
-      return jsonResponse({ success: true, message: `已删除映射: ${from}`, customMap: { ...runtimeModelMap } });
+      return jsonResponse({ success: true, message: `已删除映射: ${from}`, modelMap: { ...runtimeModelMap } });
     }
 
     if (path === '/api/upstream-url' && request.method === 'GET') {
