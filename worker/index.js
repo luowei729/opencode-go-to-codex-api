@@ -14,12 +14,17 @@ import {
   createAnthropicStreamConverter,
   createAnthropicToChatStreamConverter,
   makeUpstreamRequest,
+  DEFAULT_MODEL_MAP,
+  ANTHROPIC_MODELS,
 } from './proxy-logic.js';
 
 import indexHtml from '../pages/index.html';
 
 // Runtime default model (note: resets on each isolate restart in Workers)
 let runtimeDefaultModel = null;
+
+// Runtime custom model map (overrides DEFAULT_MODEL_MAP)
+const runtimeModelMap = {};
 
 // D1 lazy init flag
 let dbInitialized = false;
@@ -58,6 +63,10 @@ function resolveModelWithRuntime(modelName, env) {
   // 1. Runtime default (set via web UI - ephemeral in Workers)
   if (runtimeDefaultModel) {
     return runtimeDefaultModel.replace(/^opencode-go\//, '');
+  }
+  // 2. Runtime custom map (set via web UI)
+  if (runtimeModelMap[modelName]) {
+    return runtimeModelMap[modelName].replace(/^opencode-go\//, '');
   }
   return resolveModel(modelName, env);
 }
@@ -421,6 +430,36 @@ export default {
         }
       }
       return jsonResponse({ success: true, message: '日志已清空' });
+    }
+
+    if (path === '/api/model-map' && request.method === 'GET') {
+      const defaultMap = {};
+      for (const [k, v] of Object.entries(DEFAULT_MODEL_MAP)) defaultMap[k] = v;
+      return jsonResponse({
+        defaultMap,
+        customMap: { ...runtimeModelMap },
+        anthropicModels: [...ANTHROPIC_MODELS],
+      });
+    }
+
+    if (path === '/api/model-map' && request.method === 'POST') {
+      const body = await request.json();
+      const { from, to } = body;
+      if (!from || !to) {
+        return jsonResponse({ error: { message: 'from 和 to 字段必填' } }, 400);
+      }
+      runtimeModelMap[from] = to;
+      return jsonResponse({ success: true, message: `已添加映射: ${from} \u2192 ${to}`, customMap: { ...runtimeModelMap } });
+    }
+
+    if (path === '/api/model-map' && request.method === 'DELETE') {
+      const body = await request.json();
+      const { from } = body;
+      if (!from) {
+        return jsonResponse({ error: { message: 'from 字段必填' } }, 400);
+      }
+      delete runtimeModelMap[from];
+      return jsonResponse({ success: true, message: `已删除映射: ${from}`, customMap: { ...runtimeModelMap } });
     }
 
     if (path === '/v1/responses' && request.method === 'POST') {

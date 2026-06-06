@@ -20,6 +20,8 @@ const DEFAULT_MODEL_MAP = {
   'o3-mini': 'deepseek-v4-flash',
 };
 
+export { DEFAULT_MODEL_MAP, ANTHROPIC_MODELS };
+
 export function isAnthropicModel(modelName) {
   const clean = modelName.replace(/^opencode-go\//, '');
   return ANTHROPIC_MODELS.has(clean);

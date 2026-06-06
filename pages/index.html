@@ -72,6 +72,31 @@
   .log-status.err { color: #f85149; }
   .logs-empty { padding: 24px; text-align: center; color: #484f58; }
   .logs-count { color: #484f58; font-size: 12px; }
+  .map-section { margin-top: 32px; margin-bottom: 32px; }
+  .map-table { width: 100%; border-collapse: collapse; background: #161b22; border: 1px solid #30363d; border-radius: 12px; overflow: hidden; }
+  .map-table th { background: #21262d; padding: 10px 14px; text-align: left; font-size: 12px; color: #8b949e; font-weight: 600; border-bottom: 1px solid #30363d; }
+  .map-table td { padding: 10px 14px; font-size: 13px; border-bottom: 1px solid #1b1f23; }
+  .map-table tr:last-child td { border-bottom: none; }
+  .map-table tr:hover { background: #1c2129; }
+  .map-from { color: #d2a8ff; font-family: monospace; }
+  .map-arrow { color: #484f58; text-align: center; }
+  .map-to { color: #79c0ff; font-family: monospace; }
+  .map-type { font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 500; }
+  .map-type.default { background: #21262d; color: #8b949e; }
+  .map-type.custom { background: #1f3a28; color: #3fb950; }
+  .map-btn-del { background: none; border: 1px solid #30363d; color: #8b949e; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 11px; }
+  .map-btn-del:hover { color: #f85149; border-color: #f85149; }
+  .map-add-row { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
+  .map-add-row input, .map-add-row select { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 8px 12px; color: #e1e4e8; font-size: 13px; font-family: monospace; outline: none; }
+  .map-add-row input:focus, .map-add-row select:focus { border-color: #58a6ff; }
+  .map-add-row input::placeholder { color: #484f58; }
+  .map-add-row .input-from { width: 160px; }
+  .map-add-row .input-to { flex: 1; min-width: 160px; }
+  .btn-add { background: #238636; color: #fff; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500; white-space: nowrap; }
+  .btn-add:hover { background: #2ea043; }
+  .refresh-indicator { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 6px; vertical-align: middle; }
+  .refresh-indicator.active { background: #3fb950; }
+  .refresh-indicator.inactive { background: #484f58; }
 </style>
 </head>
 <body>
@@ -102,9 +127,29 @@
     兼容 OpenAI Responses API (<code>/v1/responses</code>) 和 Chat Completions API (<code>/v1/chat/completions</code>)
   </div>
 
-  <div class="section-title">可用模型</div>
+  <div class="section-title">可用模型 <span class="refresh-indicator active" id="refreshDot" title="自动刷新中"></span></div>
   <div class="model-grid" id="modelGrid">
     <div class="loading">加载模型列表中...</div>
+  </div>
+
+  <div class="map-section">
+    <div class="section-title">模型映射配置</div>
+    <div class="info-box" style="margin-bottom: 12px;">
+      当客户端请求左侧模型时，自动转换为右侧实际模型。自定义映射优先级高于默认映射。<br>
+      例: 客户端请求 <code>gpt-4o</code> → 实际使用 <code>kimi-k2.6</code>
+    </div>
+    <table class="map-table">
+      <thead><tr><th>请求模型</th><th style="width:30px"></th><th>实际模型</th><th style="width:60px">类型</th><th style="width:50px">操作</th></tr></thead>
+      <tbody id="mapTableBody">
+        <tr><td colspan="5" style="text-align:center;color:#484f58;padding:20px">加载中...</td></tr>
+      </tbody>
+    </table>
+    <div class="map-add-row">
+      <input class="input-from" id="mapFrom" placeholder="请求模型 (如 gpt-4o)" />
+      <span style="color:#484f58">→</span>
+      <select class="input-to" id="mapTo"><option value="">选择目标模型...</option></select>
+      <button class="btn-add" onclick="addMapping()">添加映射</button>
+    </div>
   </div>
 
   <div class="logs-section">
@@ -128,6 +173,8 @@
 var ANTHROPIC_MODELS = ['minimax-m3', 'minimax-m2.7', 'minimax-m2.5', 'qwen3.7-max', 'qwen3.7-plus'];
 var currentRuntimeModel = null;
 var authToken = '';
+var availableModels = [];
+var modelMapData = { defaultMap: {}, customMap: {} };
 
 function isAnthropic(model) {
   return ANTHROPIC_MODELS.indexOf(model) !== -1;
@@ -170,6 +217,7 @@ function loadModels() {
     updateStatusBar();
 
     var models = (modelsData.data || []).map(function(m) { return m.id; }).sort();
+    availableModels = models;
     var grid = document.getElementById('modelGrid');
     grid.innerHTML = '';
 
@@ -336,6 +384,106 @@ try {
 } catch(e) {}
 
 loadModels();
+
+// Auto-refresh models every 30 seconds
+setInterval(function() {
+  if (authToken) loadModels();
+}, 30000);
+
+// Model Map functions
+function loadModelMap() {
+  fetch('/api/model-map').then(function(r) { return r.json(); }).then(function(data) {
+    modelMapData = data;
+    renderModelMap();
+  }).catch(function() {});
+}
+
+function renderModelMap() {
+  var tbody = document.getElementById('mapTableBody');
+  tbody.innerHTML = '';
+  var defaultMap = modelMapData.defaultMap || {};
+  var customMap = modelMapData.customMap || {};
+
+  // Custom mappings first
+  var customKeys = Object.keys(customMap).sort();
+  customKeys.forEach(function(from) {
+    var tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td class="map-from">' + from + '</td>' +
+      '<td class="map-arrow">\u2192</td>' +
+      '<td class="map-to">' + customMap[from] + '</td>' +
+      '<td><span class="map-type custom">自定义</span></td>' +
+      '<td><button class="map-btn-del" onclick="deleteMapping(\'' + from + '\')">删除</button></td>';
+    tbody.appendChild(tr);
+  });
+
+  // Default mappings
+  var defaultKeys = Object.keys(defaultMap).sort();
+  defaultKeys.forEach(function(from) {
+    var overridden = customMap[from] ? true : false;
+    var to = overridden ? customMap[from] : defaultMap[from];
+    var tr = document.createElement('tr');
+    tr.style.opacity = overridden ? '0.5' : '1';
+    tr.innerHTML =
+      '<td class="map-from">' + from + '</td>' +
+      '<td class="map-arrow">\u2192</td>' +
+      '<td class="map-to">' + to + (overridden ? ' (\u5df2\u8986\u76d6)' : '') + '</td>' +
+      '<td><span class="map-type default">默认</span></td>' +
+      '<td></td>';
+    tbody.appendChild(tr);
+  });
+
+  if (customKeys.length === 0 && defaultKeys.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#484f58;padding:20px">\u6682\u65e0\u6620\u5c04\u914d\u7f6e</td></tr>';
+  }
+
+  // Update mapTo dropdown
+  var select = document.getElementById('mapTo');
+  var currentVal = select.value;
+  select.innerHTML = '<option value="">选择目标模型...</option>';
+  availableModels.forEach(function(m) {
+    var opt = document.createElement('option');
+    opt.value = m;
+    opt.textContent = m;
+    select.appendChild(opt);
+  });
+  if (currentVal) select.value = currentVal;
+}
+
+function addMapping() {
+  var from = document.getElementById('mapFrom').value.trim();
+  var to = document.getElementById('mapTo').value;
+  if (!from) { showToast('请输入请求模型名称', true); return; }
+  if (!to) { showToast('请选择目标模型', true); return; }
+  fetch('/api/model-map', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: from, to: to })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.success) {
+      document.getElementById('mapFrom').value = '';
+      showToast(data.message);
+      loadModelMap();
+    } else {
+      showToast(data.error?.message || '添加失败', true);
+    }
+  }).catch(function(err) { showToast('添加失败: ' + err.message, true); });
+}
+
+function deleteMapping(from) {
+  fetch('/api/model-map', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: from })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.success) {
+      showToast(data.message);
+      loadModelMap();
+    }
+  }).catch(function(err) { showToast('删除失败: ' + err.message, true); });
+}
+
+loadModelMap();
 </script>
 </body>
 </html>
