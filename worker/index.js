@@ -38,6 +38,11 @@ let runtimePassword = null;
 let passwordLoaded = false;
 const DEFAULT_PASSWORD = 'abcd.1234';
 
+// Runtime token limits - backed by D1 settings table
+let runtimeMaxContextTokens = null;
+let runtimeMaxOutputTokens = null;
+let tokenLimitsLoaded = false;
+
 // D1 lazy init flag
 let dbInitialized = false;
 
@@ -96,6 +101,20 @@ async function loadDefaultModelFromDb(env) {
     defaultModelLoaded = true;
   } catch (e) {
     console.error('Load default model error:', e.message);
+  }
+}
+
+async function loadTokenLimitsFromDb(env) {
+  if (!env.DB || tokenLimitsLoaded) return;
+  try {
+    await ensureDbTable(env);
+    const ctxRow = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind('max_context_tokens').first();
+    const outRow = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind('max_output_tokens').first();
+    runtimeMaxContextTokens = (ctxRow && ctxRow.value) ? parseInt(ctxRow.value) : null;
+    runtimeMaxOutputTokens = (outRow && outRow.value) ? parseInt(outRow.value) : null;
+    tokenLimitsLoaded = true;
+  } catch (e) {
+    console.error('Load token limits error:', e.message);
   }
 }
 
@@ -249,6 +268,7 @@ async function handleResponses(request, env, ctx) {
     if (!modelMapLoaded) await loadModelMapFromDb(env);
     if (!settingsLoaded) await loadSettingsFromDb(env);
     if (!defaultModelLoaded) await loadDefaultModelFromDb(env);
+    if (!tokenLimitsLoaded) await loadTokenLimitsFromDb(env);
     const upstreamBase = getUpstreamUrl(env);
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
 
@@ -260,6 +280,12 @@ async function handleResponses(request, env, ctx) {
     const originalModel = reqBody?.model || 'unknown';
     const resolvedModel = resolveModelWithRuntime(originalModel, env);
     const isStream = reqBody?.stream === true;
+
+    // Apply token limits if configured
+    if (runtimeMaxOutputTokens && !reqBody.max_output_tokens) {
+      reqBody.max_output_tokens = runtimeMaxOutputTokens;
+    }
+
     const useAnthropic = isAnthropicModel(resolvedModel);
 
     let upstreamBody;
@@ -355,6 +381,7 @@ async function handleChatCompletions(request, env, ctx) {
     if (!modelMapLoaded) await loadModelMapFromDb(env);
     if (!settingsLoaded) await loadSettingsFromDb(env);
     if (!defaultModelLoaded) await loadDefaultModelFromDb(env);
+    if (!tokenLimitsLoaded) await loadTokenLimitsFromDb(env);
     const upstreamBase = getUpstreamUrl(env);
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
 
@@ -366,6 +393,11 @@ async function handleChatCompletions(request, env, ctx) {
     const originalModel = reqBody?.model || 'gpt-4o';
     const resolvedModel = resolveModelWithRuntime(originalModel, env);
     reqBody.model = resolvedModel;
+
+    // Apply token limits if configured
+    if (runtimeMaxOutputTokens && !reqBody.max_tokens) {
+      reqBody.max_tokens = runtimeMaxOutputTokens;
+    }
 
     const useAnthropic = isAnthropicModel(resolvedModel);
     let upstreamBody;
@@ -664,6 +696,52 @@ export default {
         } catch (e) { console.error('Delete upstream url error:', e.message); }
       }
       return jsonResponse({ success: true, message: '已恢复默认上游地址', url: env.UPSTREAM_BASE_URL || DEFAULT_UPSTREAM });
+    }
+
+    if (path === '/api/token-limits' && request.method === 'GET') {
+      if (!tokenLimitsLoaded) await loadTokenLimitsFromDb(env);
+      return jsonResponse({
+        maxContextTokens: runtimeMaxContextTokens,
+        maxOutputTokens: runtimeMaxOutputTokens,
+      });
+    }
+
+    if (path === '/api/token-limits' && request.method === 'POST') {
+      if (!checkAuth(request)) return jsonResponse({ error: { message: '未授权，请输入密码' } }, 401);
+      const body = await request.json();
+      const { maxContextTokens, maxOutputTokens } = body;
+      if (maxContextTokens !== undefined) {
+        runtimeMaxContextTokens = maxContextTokens ? parseInt(maxContextTokens) : null;
+        if (env.DB) {
+          try {
+            await ensureDbTable(env);
+            if (runtimeMaxContextTokens) {
+              await env.DB.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').bind('max_context_tokens', String(runtimeMaxContextTokens)).run();
+            } else {
+              await env.DB.prepare('DELETE FROM settings WHERE key = ?').bind('max_context_tokens').run();
+            }
+          } catch (e) { console.error('Save max context tokens error:', e.message); }
+        }
+      }
+      if (maxOutputTokens !== undefined) {
+        runtimeMaxOutputTokens = maxOutputTokens ? parseInt(maxOutputTokens) : null;
+        if (env.DB) {
+          try {
+            await ensureDbTable(env);
+            if (runtimeMaxOutputTokens) {
+              await env.DB.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').bind('max_output_tokens', String(runtimeMaxOutputTokens)).run();
+            } else {
+              await env.DB.prepare('DELETE FROM settings WHERE key = ?').bind('max_output_tokens').run();
+            }
+          } catch (e) { console.error('Save max output tokens error:', e.message); }
+        }
+      }
+      return jsonResponse({
+        success: true,
+        message: 'Token 限制已更新',
+        maxContextTokens: runtimeMaxContextTokens,
+        maxOutputTokens: runtimeMaxOutputTokens,
+      });
     }
 
     if (path === '/v1/responses' && request.method === 'POST') {

@@ -160,6 +160,16 @@
   </div>
 
   <div class="token-box">
+    <label>Token 限制配置（留空表示不限制，使用客户端传入的值）</label>
+    <div class="token-input-row">
+      <input id="maxContextTokensInput" type="number" placeholder="上下文窗口 (如 128000)" autocomplete="off" />
+      <input id="maxOutputTokensInput" type="number" placeholder="最大输出 (如 4096)" autocomplete="off" />
+      <button class="btn-save" onclick="saveTokenLimits()">保存</button>
+    </div>
+    <div class="token-status" id="tokenLimitsStatus"></div>
+  </div>
+
+  <div class="token-box">
     <label>OpenCode Go Token（您的密钥仅存储在浏览器本地，不会上传到服务端）</label>
     <div class="token-input-row">
       <input type="password" id="tokenInput" placeholder="sk-xxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off" />
@@ -553,6 +563,7 @@ function initApp() {
   loadModels();
   loadModelMap();
   loadUpstream();
+  loadTokenLimits();
   fetchLogs();
 }
 
@@ -678,6 +689,48 @@ function resetUpstream() {
       loadModels();
     }
   }).catch(function(err) { showToast('重置失败: ' + err.message, true); });
+}
+
+// Token limits functions
+function loadTokenLimits() {
+  fetch('/api/token-limits').then(function(r) { return r.json(); }).then(function(data) {
+    document.getElementById('maxContextTokensInput').value = data.maxContextTokens || '';
+    document.getElementById('maxOutputTokensInput').value = data.maxOutputTokens || '';
+    if (data.maxContextTokens || data.maxOutputTokens) {
+      var parts = [];
+      if (data.maxContextTokens) parts.push('上下文: ' + data.maxContextTokens);
+      if (data.maxOutputTokens) parts.push('输出: ' + data.maxOutputTokens);
+      document.getElementById('tokenLimitsStatus').textContent = '\u2713 ' + parts.join(', ');
+      document.getElementById('tokenLimitsStatus').className = 'token-status ok';
+    } else {
+      document.getElementById('tokenLimitsStatus').textContent = '未设置限制';
+      document.getElementById('tokenLimitsStatus').className = 'token-status';
+    }
+  }).catch(function() {});
+}
+
+function saveTokenLimits() {
+  var ctx = document.getElementById('maxContextTokensInput').value.trim();
+  var out = document.getElementById('maxOutputTokensInput').value.trim();
+  var body = {};
+  if (ctx) body.maxContextTokens = parseInt(ctx);
+  if (out) body.maxOutputTokens = parseInt(out);
+  if (!ctx && !out) {
+    body.maxContextTokens = null;
+    body.maxOutputTokens = null;
+  }
+  fetch('/api/token-limits', {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, getAdminHeaders()),
+    body: JSON.stringify(body)
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.success) {
+      showToast('Token 限制已更新');
+      loadTokenLimits();
+    } else {
+      showToast(data.error?.message || '设置失败', true);
+    }
+  }).catch(function(err) { showToast('设置失败: ' + err.message, true); });
 }
 
 // Edit mapping inline
