@@ -419,6 +419,9 @@ function loadModels() {
       card.appendChild(metaDiv);
       grid.appendChild(card);
     });
+
+    // Update model map dropdown after models are loaded
+    renderModelMap();
   }).catch(function(err) {
     document.getElementById('modelGrid').innerHTML = '<div class="loading">加载失败: ' + err.message + '（请检查 Token 是否正确）</div>';
   });
